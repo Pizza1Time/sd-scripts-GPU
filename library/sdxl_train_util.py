@@ -26,7 +26,66 @@ TOKENIZER2_PATH = "laion/CLIP-ViT-bigG-14-laion2B-39B-b160k"
 # DEFAULT_NOISE_OFFSET = 0.0357
 
 
+import argparse
+import math
+import os
+from typing import Optional
+
+import torch
+# from library.device_utils import init_ipex, clean_memory_on_device
+# init_ipex()
+import torch_xla.core.xla_model as xm
+import torch_xla.distributed.xla_multiprocessing as xmp
+import torch_xla.utils.utils as xu
+
+from accelerate import init_empty_weights
+from tqdm import tqdm
+from transformers import CLIPTokenizer
+from library import model_util, sdxl_model_util, train_util, sdxl_original_unet
+from library.sdxl_lpw_stable_diffusion import SdxlStableDiffusionLongPromptWeightingPipeline
+from .utils import setup_logging
+setup_logging()
+import logging
+logger = logging.getLogger(__name__)
+
+TOKENIZER1_PATH = "openai/clip-vit-large-patch14"
+TOKENIZER2_PATH = "laion/CLIP-ViT-bigG-14-laion2B-39B-b160k"
+
+# DEFAULT_NOISE_OFFSET = 0.0357
+
+# def load_target_model(args, accelerator, model_version: str, weight_dtype):
 def load_target_model(args, device, model_version: str, weight_dtype):
+    # model_dtype only work with full fp16/bf16
+    # for pi in range(accelerator.state.num_processes):
+    #     if pi == accelerator.state.local_process_index:
+    #         logger.info(f"loading model for process {accelerator.state.local_process_index}/{accelerator.state.num_processes}")
+
+    #         (
+    #             load_stable_diffusion_format,
+    #             text_encoder1,
+    #             text_encoder2,
+    #             vae,
+    #             unet,
+    #             logit_scale,
+    #             ckpt_info,
+    #         ) = _load_target_model(
+    #             args.pretrained_model_name_or_path,
+    #             args.vae,
+    #             model_version,
+    #             weight_dtype,
+    #             accelerator.device if args.lowram else "cpu",
+    #             model_dtype,
+    #         )
+
+    #         # work on low-ram device
+    #         if args.lowram:
+    #             text_encoder1.to(accelerator.device)
+    #             text_encoder2.to(accelerator.device)
+    #             unet.to(accelerator.device)
+    #             vae.to(accelerator.device)
+
+    #         clean_memory_on_device(accelerator.device)
+    #     accelerator.wait_for_everyone()
     model_dtype = match_mixed_precision(args, weight_dtype)
     logger.info(f"loading model for process {xm.get_ordinal()}/{xm.xrt_world_size()}")
     (
@@ -42,22 +101,18 @@ def load_target_model(args, device, model_version: str, weight_dtype):
         args.vae,
         model_version,
         weight_dtype,
-        device if args.lowram else "cpu",
+        "cpu",
         model_dtype
     )
 
     if args.lowram:
-        text_encoder1.to(device)
-        text_encoder2.to(device)
-        unet.to(device)
-        vae.to(device)
+        text_encoder1.to(device, dtype=weight_dtype)
+        text_encoder2.to(device, dtype=weight_dtype)
+        unet.to(device, dtype=weight_dtype)
+        vae.to(device, dtype=weight_dtype)
 
-    # Remove this line:
-    # xm.clear_cache()
-
+    #return load_stable_diffusion_format, text_encoder1, text_encoder2, vae, unet, logit_scale, ckpt_info
     return load_stable_diffusion_format, text_encoder1, text_encoder2, vae, unet, logit_scale, ckpt_info
-
-
 
 def _load_target_model(
     name_or_path: str, vae_path: Optional[str], model_version: str, weight_dtype, device="cpu", model_dtype=None
@@ -77,72 +132,32 @@ def _load_target_model(
             ckpt_info,
         ) = sdxl_model_util.load_models_from_sdxl_checkpoint(model_version, name_or_path, device, model_dtype)
     else:
-        # Diffusers model is loaded to CPU
         from diffusers import StableDiffusionXLPipeline
 
         variant = "fp16" if weight_dtype == torch.float16 else None
         logger.info(f"load Diffusers pretrained models: {name_or_path}, variant={variant}")
-        # try:
-        #     try:
-        #         pipe = StableDiffusionXLPipeline.from_pretrained(
-        #             name_or_path, torch_dtype=model_dtype, variant=variant, tokenizer=None
-        #         )
-        #     except EnvironmentError as ex:
-        #         if variant is not None:
-        #             logger.info("try to load fp32 model")
-        #             pipe = StableDiffusionXLPipeline.from_pretrained(name_or_path, variant=None, tokenizer=None)
-        #         else:
-        #             raise ex
-        # except EnvironmentError as ex:
-        #     logger.error(
-        #         f"model is not found as a file or in Hugging Face, perhaps file name is wrong? / 指定したモデル名のファイル、またはHugging Faceのモデルが見つかりません。ファイル名が誤っているかもしれません: {name_or_path}"
-        #     )
-        #     raise ex
-        
-        # Ensure 'device_map' is not set to avoid conflicts with model sharding.
-        kwargs = {"torch_dtype": model_dtype, "variant": variant, "tokenizer": None}
-        if device == "cpu":
-            # Setting 'device_map' when the target device is 'cpu' might lead to unexpected behavior.
-            # It's generally recommended to load the model directly to the CPU without specifying 'device_map'.
-            pass
-        else:
-            # If a specific device is specified (other than CPU), you might adjust this logic
-            # to potentially utilize 'device_map' for more complex model distributions.
-            # However, ensure thorough testing as 'device_map' behavior can vary.
-            kwargs["device"] = device
 
-        try:
-            pipe = StableDiffusionXLPipeline.from_pretrained(name_or_path, **kwargs)
-        except EnvironmentError as ex:
-            if variant is not None:
-                logger.info("Trying to load the model without specifying a variant.")
-                try:
-                    pipe = StableDiffusionXLPipeline.from_pretrained(name_or_path, torch_dtype=model_dtype, tokenizer=None)
-                except Exception as inner_ex:
-                    logger.error(f"Failed to load the model even without specifying a variant: {inner_ex}")
-                    raise inner_ex
-            else:
-                logger.error(f"Failed to load the model: {ex}")
-                raise ex
+        # Load to CPU first, then move to XLA device
+        pipe = StableDiffusionXLPipeline.from_pretrained(name_or_path, torch_dtype=torch.float32, variant=variant, tokenizer=None, local_files_only=True)
+        pipe.to(torch.device("cpu"))
 
         text_encoder1 = pipe.text_encoder
         text_encoder2 = pipe.text_encoder_2
-
-        # # convert to fp32 for cache text_encoders outputs
-        # if text_encoder1.dtype != torch.float32:
-        #     text_encoder1 = text_encoder1.to(dtype=torch.float32)
-        # if text_encoder2.dtype != torch.float32:
-        #     text_encoder2 = text_encoder2.to(dtype=torch.float32)
-
         vae = pipe.vae
         unet = pipe.unet
         del pipe
 
+        # Move models to target device with specified dtype
+        text_encoder1.to(device, dtype=weight_dtype)
+        text_encoder2.to(device, dtype=weight_dtype)
+        vae.to(device, dtype=weight_dtype if weight_dtype is not None else vae.dtype)
+        unet.to(device, dtype=weight_dtype)
+
         # Diffusers U-Net to original U-Net
         state_dict = sdxl_model_util.convert_diffusers_unet_state_dict_to_sdxl(unet.state_dict())
         with init_empty_weights():
-            unet = sdxl_original_unet.SdxlUNet2DConditionModel()  # overwrite unet
-        sdxl_model_util._load_state_dict_on_device(unet, state_dict, device=device, dtype=model_dtype)
+            unet = sdxl_original_unet.SdxlUNet2DConditionModel()
+        sdxl_model_util.load_state_dict(unet, state_dict)
         logger.info("U-Net converted to original U-Net")
 
         logit_scale = None
@@ -151,6 +166,7 @@ def _load_target_model(
     # VAEを読み込む
     if vae_path is not None:
         vae = model_util.load_vae(vae_path, weight_dtype)
+        vae.to(device, dtype=model_dtype)
         logger.info("additional VAE loaded")
 
     return load_stable_diffusion_format, text_encoder1, text_encoder2, vae, unet, logit_scale, ckpt_info
