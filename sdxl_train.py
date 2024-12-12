@@ -303,7 +303,7 @@ def train(index, args):
             train_dataset_group.cache_latents(vae, args.vae_batch_size, args.cache_latents_to_disk, True) # Replace accelerator.is_main_process
         vae.to("cpu")
         # clean_memory_on_device(accelerator.device)
-        xm.clear_cache()
+        #xm.clear_cache()
 
         # accelerator.wait_for_everyone()
         xm.rendezvous("wait_after_cache_latents") # wait for all processes
@@ -491,66 +491,6 @@ def train(index, args):
         text_encoder1.text_model.encoder.layers[-1].requires_grad_(False)
         text_encoder1.text_model.final_layer_norm.requires_grad_(False)
 
-    """ if args.deepspeed:
-        ds_model = deepspeed_utils.prepare_deepspeed_model(
-            args,
-            unet=unet if train_unet else None,
-            text_encoder1=text_encoder1 if train_text_encoder1 else None,
-            text_encoder2=text_encoder2 if train_text_encoder2 else None,
-        )
-        # most of ZeRO stage uses optimizer partitioning, so we have to prepare optimizer and ds_model at the same time. # pull/1139#issuecomment-1986790007
-        ds_model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-            ds_model, optimizer, train_dataloader, lr_scheduler
-        )
-        training_models = [ds_model] """
-
-    # if args.deepspeed: # Replace with torch-xla
-    #     # Below are accelerate's specific changes to handle deepspeed.
-    #     # We need to do these changes if and only if we use deepspeed_config_file.
-    #     # If not we should not do these changes.
-    #     # If user doesn't pass `deepspeed_config_file` then the logic of whether using deepspeed or not
-    #     # is handled by accelerate internally.
-
-    #     # Enables advanced optimizations when using DeepSpeed.
-    #     # `gradient_accumulation_steps` should be passed when using deepspeed_config_file.
-    #     # Internally in `deepspeed_config_file`, accelerate did this already.
-    #     # But we should do this before prepare.
-
-    #     # If user doesn't use deepspeed_config_file, we don't have to pass gradient_accumulation_steps
-    #     # accelerate will handle that internally.
-
-    #     # If user uses deepspeed_config_file, user can pass `gradient_accumulation_steps` to accelerate.
-    #     # But we should do this before prepare.
-
-    #     # Enables Zero Stage 3 and saves the state on ` பயிற்சியின்_end`.
-    #     # If user uses deepspeed_config_file and doesn't use save_state, then there is no need for this.
-    #     # If user uses deepspeed_config_file and uses save_state, then user has to pass `zero3_save_16bit_model` to accelerate.
-    #     # But we should do this before prepare.
-
-    #     # prepare training models
-    #     # If user uses deepspeed_config_file, user can pass `model_list` to accelerate.
-    #     # But we should do this before prepare.
-    #     ds_model = deepspeed_utils.prepare_deepspeed_model(
-    #         args,
-    #         unet=unet if train_unet else None,
-    #         text_encoder1=text_encoder1 if train_text_encoder1 else None,
-    #         text_encoder2=text_encoder2 if train_text_encoder2 else None,
-    #     )
-    #     # most of ZeRO stage uses optimizer partitioning, so we have to prepare optimizer and ds_model at the same time. # pull/1139#issuecomment-1986790007
-    #     ds_model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-    #         ds_model, optimizer, train_dataloader, lr_scheduler
-    #     )
-    #     training_models = [ds_model]
-
-    # else: # Replace with torch-xla
-    #     # acceleratorがなんかよろしくやってくれるらしい
-    #     if train_unet:
-    #         unet = accelerator.prepare(unet)
-    #     if train_text_encoder1:
-    #         text_encoder1 = accelerator.prepare(text_encoder1)
-    #     if train_text_encoder2:
-    #         text_encoder2 = accelerator.prepare(text_encoder2)
-    #     optimizer, train_dataloader, lr_scheduler = accelerator.prepare(optimizer, train_dataloader, lr_scheduler)
     if train_unet:
         unet = unet.to(device)
     if train_text_encoder1:
@@ -575,7 +515,7 @@ def train(index, args):
         text_encoder1.to("cpu", dtype=torch.float32)
         text_encoder2.to("cpu", dtype=torch.float32)
         # clean_memory_on_device(accelerator.device)
-        xm.clear_cache()
+        #xm.clear_cache()
     else:
         # make sure Text Encoders are on GPU
         # text_encoder1.to(accelerator.device)
