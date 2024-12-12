@@ -625,13 +625,17 @@ def train(index, args):
     # accelerator.print(f"  total optimization steps / 学習ステップ数: {args.max_train_steps}")
     logger.info(f"  total optimization steps / 学習ステップ数: {args.max_train_steps}")
 
+    global_step = 0
+    if args.resume is not None:
+        if "global_step" in state_dict:
+            global_step = state_dict["global_step"]
+            logger.info(f"resumed from step {global_step}")
+
     # progress_bar = tqdm(range(args.max_train_steps), smoothing=0, disable=not accelerator.is_local_main_process, desc="steps")
     # progress_bar = tqdm(range(args.max_train_steps), smoothing=0, disable=not xm.is_master_ordinal(), desc="steps")
     if xm.is_master_ordinal():
         progress_bar = tqdm(total=args.max_train_steps, smoothing=0, desc="steps", position=0)
         progress_bar.update(global_step)
-
-    global_step = 0
 
     noise_scheduler = DDPMScheduler(
         beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000, clip_sample=False
