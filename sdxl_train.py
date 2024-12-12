@@ -45,8 +45,6 @@ from library.custom_train_functions import (
 )
 from library.sdxl_original_unet import SdxlUNet2DConditionModel
 
-from accelerate.utils import DummyOptim, DummyScheduler  # Import Dummy classes
-
 
 UNET_NUM_BLOCKS_FOR_BLOCK_LR = 23
 
@@ -357,8 +355,7 @@ def train(args):
 
     # 学習に必要なクラスを準備する
     accelerator.print("prepare optimizer, data loader etc.")
-    #_, _, optimizer = train_util.get_optimizer(args, trainable_params=params_to_optimize)
-    optimizer_type, optimizer_kwargs, optimizer = train_util.get_optimizer(args, trainable_params=params_to_optimize)
+    _, _, optimizer = train_util.get_optimizer(args, trainable_params=params_to_optimize)
 
     # dataloaderを準備する
     # DataLoaderのプロセス数：0 は persistent_workers が使えないので注意
@@ -385,20 +382,7 @@ def train(args):
     train_dataset_group.set_max_train_steps(args.max_train_steps)
 
     # lr schedulerを用意する
-    #lr_scheduler = train_util.get_scheduler_fix(args, optimizer, accelerator.num_processes)
-    if accelerator.state.deepspeed_plugin is not None and "optimizer" in accelerator.state.deepspeed_plugin.deepspeed_config:
-        # Must use a Dummy Optimizer when config has specified an optimizer. 
-        optimizer = DummyOptim(optimizer.param_groups) # 
-    if accelerator.state.deepspeed_plugin is not None and "scheduler" in accelerator.state.deepspeed_plugin.deepspeed_config:
-        # Must use a Dummy Scheduler when config has specified a scheduler.
-        # Pass num_training_steps to the DummyScheduler so it can calculate lr correctly.
-        lr_scheduler = DummyScheduler(
-            optimizer, 
-            total_num_steps=args.max_train_steps, 
-            warmup_num_steps=args.lr_warmup_steps if "num_warmup_steps" not in accelerator.state.deepspeed_plugin.deepspeed_config["scheduler"]["params"] else accelerator.state.deepspeed_plugin.deepspeed_config["scheduler"]["params"]["num_warmup_steps"]
-        )
-    else:
-        lr_scheduler = train_util.get_scheduler_fix(args, optimizer, accelerator.num_processes)
+    lr_scheduler = train_util.get_scheduler_fix(args, optimizer, accelerator.num_processes)
 
     # 実験的機能：勾配も含めたfp16/bf16学習を行う　モデル全体をfp16/bf16にする
     if args.full_fp16:
@@ -423,45 +407,7 @@ def train(args):
         text_encoder1.text_model.encoder.layers[-1].requires_grad_(False)
         text_encoder1.text_model.final_layer_norm.requires_grad_(False)
 
-    """ if args.deepspeed:
-        ds_model = deepspeed_utils.prepare_deepspeed_model(
-            args,
-            unet=unet if train_unet else None,
-            text_encoder1=text_encoder1 if train_text_encoder1 else None,
-            text_encoder2=text_encoder2 if train_text_encoder2 else None,
-        )
-        # most of ZeRO stage uses optimizer partitioning, so we have to prepare optimizer and ds_model at the same time. # pull/1139#issuecomment-1986790007
-        ds_model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-            ds_model, optimizer, train_dataloader, lr_scheduler
-        )
-        training_models = [ds_model] """
-
     if args.deepspeed:
-        # Below are accelerate's specific changes to handle deepspeed.
-        # We need to do these changes if and only if we use deepspeed_config_file.
-        # If not we should not do these changes.
-        # If user doesn't pass `deepspeed_config_file` then the logic of whether using deepspeed or not
-        # is handled by accelerate internally.
-
-        # Enables advanced optimizations when using DeepSpeed.
-        # `gradient_accumulation_steps` should be passed when using deepspeed_config_file.
-        # Internally in `deepspeed_config_file`, accelerate did this already.
-        # But we should do this before prepare.
-
-        # If user doesn't use deepspeed_config_file, we don't have to pass gradient_accumulation_steps
-        # accelerate will handle that internally.
-
-        # If user uses deepspeed_config_file, user can pass `gradient_accumulation_steps` to accelerate.
-        # But we should do this before prepare.
-
-        # Enables Zero Stage 3 and saves the state on ` பயிற்சியின்_end`.
-        # If user uses deepspeed_config_file and doesn't use save_state, then there is no need for this.
-        # If user uses deepspeed_config_file and uses save_state, then user has to pass `zero3_save_16bit_model` to accelerate.
-        # But we should do this before prepare.
-
-        # prepare training models
-        # If user uses deepspeed_config_file, user can pass `model_list` to accelerate.
-        # But we should do this before prepare.
         ds_model = deepspeed_utils.prepare_deepspeed_model(
             args,
             unet=unet if train_unet else None,
