@@ -549,6 +549,7 @@ def train(args):
     )
 
     loss_recorder = train_util.LossRecorder()
+    epoch = 0
     for epoch in range(num_train_epochs):
         accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}")
         current_epoch.value = epoch + 1
