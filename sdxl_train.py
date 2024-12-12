@@ -22,6 +22,8 @@ import library.train_util as train_util
 
 from library.utils import setup_logging, add_logging_arguments
 
+from torch.utils.data.distributed import DistributedSampler
+
 setup_logging()
 import logging
 
@@ -417,32 +419,32 @@ def train(index, args):
     #     persistent_workers=args.persistent_data_loader_workers,
     # )
     # Convert to XLA DataLoader
-    train_sampler = torch.utils.data.distributed.DistributedSampler(
+    if args.max_train_epochs is not None:
+        num_samples = len(train_dataset_group)
+        num_update_steps_per_epoch = math.ceil(
+            num_samples / args.gradient_accumulation_steps
+        )
+        args.max_train_steps = args.max_train_epochs * num_update_steps_per_epoch
+        logger.info(
+    f"override steps. steps for {args.max_train_epochs} epochs is: {args.max_train_steps}"
+        )
+
+    train_sampler = DistributedSampler(
         train_dataset_group,
         num_replicas=xm.xrt_world_size(),
         rank=xm.get_ordinal(),
         shuffle=True,
     )
+
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset_group,
         batch_size=args.train_batch_size,
         sampler=train_sampler,
         collate_fn=collator,
-        num_workers=n_workers,
+        num_workers=args.max_data_loader_n_workers,
         drop_last=True,
-        persistent_workers=args.persistent_data_loader_workers,
+        pin_memory=True
     )
-
-    # 学習ステップ数を計算する
-    if args.max_train_epochs is not None:
-        args.max_train_steps = args.max_train_epochs * math.ceil(
-            # len(train_dataloader) / accelerator.num_processes / args.gradient_accumulation_steps
-            len(train_dataloader) / args.gradient_accumulation_steps
-        )
-        # accelerator.print(
-        logger.info(
-            f"override steps. steps for {args.max_train_epochs} epochs is / 指定エポックまでのステップ数: {args.max_train_steps}"
-        )
 
     # データセット側にも学習ステップを送信
     train_dataset_group.set_max_train_steps(args.max_train_steps)
