@@ -436,7 +436,7 @@ def train(args):
         )
         training_models = [ds_model] """
 
-if args.deepspeed:
+    if args.deepspeed:
         # Below are accelerate's specific changes to handle deepspeed.
         # We need to do these changes if and only if we use deepspeed_config_file.
         # If not we should not do these changes.
