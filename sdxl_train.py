@@ -436,7 +436,7 @@ def train(args):
         )
         training_models = [ds_model] """
 
-    if args.deepspeed:
+if args.deepspeed:
         # Below are accelerate's specific changes to handle deepspeed.
         # We need to do these changes if and only if we use deepspeed_config_file.
         # If not we should not do these changes.
@@ -469,9 +469,11 @@ def train(args):
             text_encoder2=text_encoder2 if train_text_encoder2 else None,
         )
         # most of ZeRO stage uses optimizer partitioning, so we have to prepare optimizer and ds_model at the same time. # pull/1139#issuecomment-1986790007
-        ds_model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-            ds_model, optimizer, train_dataloader, lr_scheduler
-        )
+        model_list = [ds_model] if ds_model is not None else []
+        [ds_model] = [accelerator.prepare(ds_model)]
+        # ds_model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        #     ds_model, optimizer, train_dataloader, lr_scheduler
+        # )
         training_models = [ds_model]
 
     else:
