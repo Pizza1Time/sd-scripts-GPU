@@ -686,7 +686,13 @@ def train(index, args):
         for step, batch in enumerate(train_dataloader):
             current_step.value = global_step
             # with accelerator.accumulate(*training_models):
-            with torch.autograd.set_detect_anomaly(args.detect_anomaly) if args.detect_anomaly else xu.no_context():
+            if args.detect_anomaly:
+                with torch.autograd.set_detect_anomaly(True):
+                    for param in training_models[0].parameters():
+                        if param.grad is not None:
+                            param.grad.detach_()
+                            param.grad.zero_()
+            else:
                 for param in training_models[0].parameters():
                     if param.grad is not None:
                         param.grad.detach_()
