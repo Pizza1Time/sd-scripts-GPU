@@ -4,8 +4,11 @@ import os
 from typing import Optional
 
 import torch
-from library.device_utils import init_ipex, clean_memory_on_device
-init_ipex()
+# from library.device_utils import init_ipex, clean_memory_on_device
+# init_ipex()
+import torch_xla.core.xla_model as xm
+import torch_xla.distributed.xla_multiprocessing as xmp
+import torch_xla.utils.utils as xu
 
 from accelerate import init_empty_weights
 from tqdm import tqdm
@@ -22,41 +25,70 @@ TOKENIZER2_PATH = "laion/CLIP-ViT-bigG-14-laion2B-39B-b160k"
 
 # DEFAULT_NOISE_OFFSET = 0.0357
 
+# def load_target_model(args, accelerator, model_version: str, weight_dtype):
+def load_target_model(args, device, model_version: str, weight_dtype):
+    # model_dtype = match_mixed_precision(args, weight_dtype)  # prepare fp16/bf16
+    # for pi in range(accelerator.state.num_processes):
+    #     if pi == accelerator.state.local_process_index:
+    #         logger.info(f"loading model for process {accelerator.state.local_process_index}/{accelerator.state.num_processes}")
 
-def load_target_model(args, accelerator, model_version: str, weight_dtype):
-    model_dtype = match_mixed_precision(args, weight_dtype)  # prepare fp16/bf16
-    for pi in range(accelerator.state.num_processes):
-        if pi == accelerator.state.local_process_index:
-            logger.info(f"loading model for process {accelerator.state.local_process_index}/{accelerator.state.num_processes}")
+    #         (
+    #             load_stable_diffusion_format,
+    #             text_encoder1,
+    #             text_encoder2,
+    #             vae,
+    #             unet,
+    #             logit_scale,
+    #             ckpt_info,
+    #         ) = _load_target_model(
+    #             args.pretrained_model_name_or_path,
+    #             args.vae,
+    #             model_version,
+    #             weight_dtype,
+    #             accelerator.device if args.lowram else "cpu",
+    #             model_dtype,
+    #         )
 
-            (
-                load_stable_diffusion_format,
-                text_encoder1,
-                text_encoder2,
-                vae,
-                unet,
-                logit_scale,
-                ckpt_info,
-            ) = _load_target_model(
-                args.pretrained_model_name_or_path,
-                args.vae,
-                model_version,
-                weight_dtype,
-                accelerator.device if args.lowram else "cpu",
-                model_dtype,
-            )
+    #         # work on low-ram device
+    #         if args.lowram:
+    #             text_encoder1.to(accelerator.device)
+    #             text_encoder2.to(accelerator.device)
+    #             unet.to(accelerator.device)
+    #             vae.to(accelerator.device)
 
-            # work on low-ram device
-            if args.lowram:
-                text_encoder1.to(accelerator.device)
-                text_encoder2.to(accelerator.device)
-                unet.to(accelerator.device)
-                vae.to(accelerator.device)
+    #         clean_memory_on_device(accelerator.device)
+    #     accelerator.wait_for_everyone()
+    model_dtype = match_mixed_precision(args, weight_dtype)
+    logger.info(f"loading model for process {xm.get_ordinal()}/{xm.xrt_world_size()}")
+    (
+        load_stable_diffusion_format,
+        text_encoder1,
+        text_encoder2,
+        vae,
+        unet,
+        logit_scale,
+        ckpt_info,
+    ) = _load_target_model(
+        args.pretrained_model_name_or_path,
+        args.vae,
+        model_version,
+        weight_dtype,
+        device if args.lowram else "cpu",
+        model_dtype
+    )
 
-            clean_memory_on_device(accelerator.device)
-        accelerator.wait_for_everyone()
+    if args.lowram:
+        text_encoder1.to(device)
+        text_encoder2.to(device)
+        unet.to(device)
+        vae.to(device)
 
+    # clean_memory_on_device(accelerator.device)
+    xm.clear_cache()
+
+    # return load_stable_diffusion_format, text_encoder1, text_encoder2, vae, unet, logit_scale, ckpt_info
     return load_stable_diffusion_format, text_encoder1, text_encoder2, vae, unet, logit_scale, ckpt_info
+
 
 
 def _load_target_model(
@@ -82,31 +114,57 @@ def _load_target_model(
 
         variant = "fp16" if weight_dtype == torch.float16 else None
         logger.info(f"load Diffusers pretrained models: {name_or_path}, variant={variant}")
+        # try:
+        #     try:
+        #         pipe = StableDiffusionXLPipeline.from_pretrained(
+        #             name_or_path, torch_dtype=model_dtype, variant=variant, tokenizer=None
+        #         )
+        #     except EnvironmentError as ex:
+        #         if variant is not None:
+        #             logger.info("try to load fp32 model")
+        #             pipe = StableDiffusionXLPipeline.from_pretrained(name_or_path, variant=None, tokenizer=None)
+        #         else:
+        #             raise ex
+        # except EnvironmentError as ex:
+        #     logger.error(
+        #         f"model is not found as a file or in Hugging Face, perhaps file name is wrong? / 指定したモデル名のファイル、またはHugging Faceのモデルが見つかりません。ファイル名が誤っているかもしれません: {name_or_path}"
+        #     )
+        #     raise ex
+        
+        # Ensure 'device_map' is not set to avoid conflicts with model sharding.
+        kwargs = {"torch_dtype": model_dtype, "variant": variant, "tokenizer": None}
+        if device == "cpu":
+            # Setting 'device_map' when the target device is 'cpu' might lead to unexpected behavior.
+            # It's generally recommended to load the model directly to the CPU without specifying 'device_map'.
+            pass
+        else:
+            # If a specific device is specified (other than CPU), you might adjust this logic
+            # to potentially utilize 'device_map' for more complex model distributions.
+            # However, ensure thorough testing as 'device_map' behavior can vary.
+            kwargs["device"] = device
+
         try:
-            try:
-                pipe = StableDiffusionXLPipeline.from_pretrained(
-                    name_or_path, torch_dtype=model_dtype, variant=variant, tokenizer=None
-                )
-            except EnvironmentError as ex:
-                if variant is not None:
-                    logger.info("try to load fp32 model")
-                    pipe = StableDiffusionXLPipeline.from_pretrained(name_or_path, variant=None, tokenizer=None)
-                else:
-                    raise ex
+            pipe = StableDiffusionXLPipeline.from_pretrained(name_or_path, **kwargs)
         except EnvironmentError as ex:
-            logger.error(
-                f"model is not found as a file or in Hugging Face, perhaps file name is wrong? / 指定したモデル名のファイル、またはHugging Faceのモデルが見つかりません。ファイル名が誤っているかもしれません: {name_or_path}"
-            )
-            raise ex
+            if variant is not None:
+                logger.info("Trying to load the model without specifying a variant.")
+                try:
+                    pipe = StableDiffusionXLPipeline.from_pretrained(name_or_path, torch_dtype=model_dtype, tokenizer=None)
+                except Exception as inner_ex:
+                    logger.error(f"Failed to load the model even without specifying a variant: {inner_ex}")
+                    raise inner_ex
+            else:
+                logger.error(f"Failed to load the model: {ex}")
+                raise ex
 
         text_encoder1 = pipe.text_encoder
         text_encoder2 = pipe.text_encoder_2
 
-        # convert to fp32 for cache text_encoders outputs
-        if text_encoder1.dtype != torch.float32:
-            text_encoder1 = text_encoder1.to(dtype=torch.float32)
-        if text_encoder2.dtype != torch.float32:
-            text_encoder2 = text_encoder2.to(dtype=torch.float32)
+        # # convert to fp32 for cache text_encoders outputs
+        # if text_encoder1.dtype != torch.float32:
+        #     text_encoder1 = text_encoder1.to(dtype=torch.float32)
+        # if text_encoder2.dtype != torch.float32:
+        #     text_encoder2 = text_encoder2.to(dtype=torch.float32)
 
         vae = pipe.vae
         unet = pipe.unet
@@ -128,7 +186,6 @@ def _load_target_model(
         logger.info("additional VAE loaded")
 
     return load_stable_diffusion_format, text_encoder1, text_encoder2, vae, unet, logit_scale, ckpt_info
-
 
 def load_tokenizers(args: argparse.Namespace):
     logger.info("prepare tokenizers")
@@ -160,21 +217,25 @@ def load_tokenizers(args: argparse.Namespace):
 
     return tokeniers
 
-
 def match_mixed_precision(args, weight_dtype):
-    if args.full_fp16:
-        assert (
-            weight_dtype == torch.float16
-        ), "full_fp16 requires mixed precision='fp16' / full_fp16を使う場合はmixed_precision='fp16'を指定してください。"
-        return weight_dtype
-    elif args.full_bf16:
-        assert (
-            weight_dtype == torch.bfloat16
-        ), "full_bf16 requires mixed precision='bf16' / full_bf16を使う場合はmixed_precision='bf16'を指定してください。"
-        return weight_dtype
+    # if args.full_fp16:
+    #     assert (
+    #         weight_dtype == torch.float16
+    #     ), "full_fp16 requires mixed precision='fp16' / full_fp16を使う場合はmixed_precision='fp16'を指定してください。"
+    #     return weight_dtype
+    # elif args.full_bf16:
+    #     assert (
+    #         weight_dtype == torch.bfloat16
+    #     ), "full_bf16 requires mixed precision='bf16' / full_bf16を使う場合はmixed_precision='bf16'を指定してください。"
+    #     return weight_dtype
+    # else:
+    #     return None
+    if args.mixed_precision == "fp16":
+        return torch.float16
+    elif args.mixed_precision == "bf16":
+        return torch.bfloat16
     else:
         return None
-
 
 def timestep_embedding(timesteps, dim, max_period=10000):
     """
@@ -195,7 +256,6 @@ def timestep_embedding(timesteps, dim, max_period=10000):
         embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
     return embedding
 
-
 def get_timestep_embedding(x, outdim):
     assert len(x.shape) == 2
     b, dims = x.shape[0], x.shape[1]
@@ -204,14 +264,12 @@ def get_timestep_embedding(x, outdim):
     emb = torch.reshape(emb, (b, dims * outdim))
     return emb
 
-
 def get_size_embeddings(orig_size, crop_size, target_size, device):
     emb1 = get_timestep_embedding(orig_size, 256)
     emb2 = get_timestep_embedding(crop_size, 256)
     emb3 = get_timestep_embedding(target_size, 256)
     vector = torch.cat([emb1, emb2, emb3], dim=1).to(device)
     return vector
-
 
 def save_sd_model_on_train_end(
     args: argparse.Namespace,
@@ -227,6 +285,7 @@ def save_sd_model_on_train_end(
     vae,
     logit_scale,
     ckpt_info,
+    force_sync_upload: bool = False,
 ):
     def sd_saver(ckpt_file, epoch_no, global_step):
         sai_metadata = train_util.get_sai_model_spec(None, args, True, False, False, is_stable_diffusion_ckpt=True)
@@ -257,16 +316,15 @@ def save_sd_model_on_train_end(
         )
 
     train_util.save_sd_model_on_train_end_common(
-        args, save_stable_diffusion_format, use_safetensors, epoch, global_step, sd_saver, diffusers_saver
+        args, save_stable_diffusion_format, use_safetensors, epoch, global_step, sd_saver, diffusers_saver, force_sync_upload
     )
-
 
 # epochとstepの保存、メタデータにepoch/stepが含まれ引数が同じになるため、統合している
 # on_epoch_end: Trueならepoch終了時、Falseならstep経過時
 def save_sd_model_on_epoch_end_or_stepwise(
     args: argparse.Namespace,
     on_epoch_end: bool,
-    accelerator,
+    # accelerator,
     src_path,
     save_stable_diffusion_format: bool,
     use_safetensors: bool,
@@ -280,6 +338,7 @@ def save_sd_model_on_epoch_end_or_stepwise(
     vae,
     logit_scale,
     ckpt_info,
+    force_sync_upload: bool = False,
 ):
     def sd_saver(ckpt_file, epoch_no, global_step):
         sai_metadata = train_util.get_sai_model_spec(None, args, True, False, False, is_stable_diffusion_ckpt=True)
@@ -312,7 +371,7 @@ def save_sd_model_on_epoch_end_or_stepwise(
     train_util.save_sd_model_on_epoch_end_or_stepwise_common(
         args,
         on_epoch_end,
-        accelerator,
+        # accelerator,
         save_stable_diffusion_format,
         use_safetensors,
         epoch,
@@ -320,8 +379,8 @@ def save_sd_model_on_epoch_end_or_stepwise(
         global_step,
         sd_saver,
         diffusers_saver,
+        force_sync_upload
     )
-
 
 def add_sdxl_training_arguments(parser: argparse.ArgumentParser):
     parser.add_argument(
@@ -332,7 +391,6 @@ def add_sdxl_training_arguments(parser: argparse.ArgumentParser):
         action="store_true",
         help="cache text encoder outputs to disk / text encoderの出力をディスクにキャッシュする",
     )
-
 
 def verify_sdxl_training_args(args: argparse.Namespace, supportTextEncoderCaching: bool = True):
     assert not args.v2, "v2 cannot be enabled in SDXL training / SDXL学習ではv2を有効にすることはできません"
@@ -367,6 +425,26 @@ def verify_sdxl_training_args(args: argparse.Namespace, supportTextEncoderCachin
                 + "cache_text_encoder_outputs_to_diskが有効になっているためcache_text_encoder_outputsが有効になりました"
             )
 
-
-def sample_images(*args, **kwargs):
-    return train_util.sample_images_common(SdxlStableDiffusionLongPromptWeightingPipeline, *args, **kwargs)
+def sample_images(
+    args: argparse.Namespace,
+    epoch: int,
+    global_step: int,
+    device: torch.device,
+    vae,
+    tokenizers,
+    text_encoders,
+    unet,
+    prompt_replacement: Optional[dict] = None,
+):
+    train_util.sample_images_common(
+        SdxlStableDiffusionLongPromptWeightingPipeline,
+        args,
+        epoch,
+        global_step,
+        device,
+        vae,
+        tokenizers,
+        text_encoders,
+        unet,
+        prompt_replacement,
+    )
