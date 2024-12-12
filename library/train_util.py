@@ -5162,10 +5162,10 @@ def sample_images_common(
     # clear pipeline and cache to reduce vram usage
     del pipeline
 
-    # Clear the memory
+    #Clear the memory
     with torch.autocast(device_type="xla", dtype=weight_dtype, enabled=args.mixed_precision != "no"):
          torch.cuda.empty_cache()
-    xm.clear_cache()
+    #xm.clear_cache()
 
     torch.set_rng_state(rng_state)
     if cuda_rng_state is not None:
