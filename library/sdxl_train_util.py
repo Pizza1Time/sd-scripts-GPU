@@ -346,6 +346,5 @@ def sample_images(
         tokenizers,
         text_encoders,
         unet,
-        # Remove prompt_replacement here
-        # prompt_replacement, 
+        prompt_replacement,
     )

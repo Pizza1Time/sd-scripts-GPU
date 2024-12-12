@@ -659,18 +659,16 @@ def train(index, args):
 
     # For --sample_at_first
     sdxl_train_util.sample_images(
-        # accelerator,
-        None,
+        None, # Removed accelerator
         args,
         0,
         global_step,
-        # accelerator.device,
-        device,
+        device, # Removed accelerator.device
         vae,
         [tokenizer1, tokenizer2],
         [text_encoder1, text_encoder2],
         unet,
-        prompt_replacement=None
+        #Removed prompt_replacement=None
     )
 
     loss_recorder = train_util.LossRecorder()
@@ -844,19 +842,18 @@ def train(index, args):
                 progress_bar.update(1)
             global_step += 1
 
+            # Within the training loop in sdxl_train.py, where sample_images is called
             sdxl_train_util.sample_images(
-                # accelerator,
-                None,
+                None, # Removed accelerator
                 args,
-                None,
+                None, #Removed epoch
                 global_step,
-                # accelerator.device,
-                device,
+                device, # Removed accelerator.device
                 vae,
                 [tokenizer1, tokenizer2],
                 [text_encoder1, text_encoder2],
                 unet,
-                prompt_replacement=None
+                #Removed prompt_replacement=None
             )
 
             # 指定ステップごとにモデルを保存
