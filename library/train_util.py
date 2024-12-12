@@ -4308,7 +4308,7 @@ def load_target_model(args, weight_dtype, unet_use_linear_projection_in_v2=False
         unet.to(device)
         vae.to(device)
 
-    xm.clear_cache()
+    #xm.clear_cache()
 
     # Ensure the models are replicated on all devices.
     xm.rendezvous("load_target_model")
