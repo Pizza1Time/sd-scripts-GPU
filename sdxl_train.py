@@ -658,7 +658,7 @@ def train(index, args):
             writer = SummaryWriter(log_dir)
 
     # For --sample_at_first
-    sdxl_train_util.sample_images(
+    """ sdxl_train_util.sample_images(
         None, # Removed accelerator
         args,
         0,
@@ -668,8 +668,7 @@ def train(index, args):
         [tokenizer1, tokenizer2],
         [text_encoder1, text_encoder2],
         unet,
-        #Removed prompt_replacement=None
-    )
+    ) """
 
     loss_recorder = train_util.LossRecorder()
     
@@ -843,7 +842,7 @@ def train(index, args):
             global_step += 1
 
             # Within the training loop in sdxl_train.py, where sample_images is called
-            sdxl_train_util.sample_images(
+            """ sdxl_train_util.sample_images(
                 None, # Removed accelerator
                 args,
                 None, #Removed epoch
@@ -854,7 +853,7 @@ def train(index, args):
                 [text_encoder1, text_encoder2],
                 unet,
                 #Removed prompt_replacement=None
-            )
+            ) """
 
             # 指定ステップごとにモデルを保存
             if args.save_every_n_steps is not None and global_step % args.save_every_n_steps == 0:
@@ -948,7 +947,7 @@ def train(index, args):
                     force_sync_upload=True if args.huggingface_repo_id is not None else False,
                 )
 
-        sdxl_train_util.sample_images(
+        """ sdxl_train_util.sample_images(
             # accelerator,
             None,
             args,
@@ -961,7 +960,7 @@ def train(index, args):
             [text_encoder1, text_encoder2],
             unet,
             prompt_replacement=None
-        )
+        ) """
 
     # is_main_process = accelerator.is_main_process
     is_main_process = xm.is_master_ordinal()
