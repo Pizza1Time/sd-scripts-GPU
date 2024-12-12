@@ -326,25 +326,25 @@ def verify_sdxl_training_args(args: argparse.Namespace, supportTextEncoderCachin
             )
 
 def sample_images(
-    args: argparse.Namespace,
-    epoch: int,
-    global_step: int,
-    device: torch.device,
-    vae,
-    tokenizers,
-    text_encoders,
-    unet,
-    prompt_replacement: Optional[dict] = None,
-):
-    train_util.sample_images_common(
-        SdxlStableDiffusionLongPromptWeightingPipeline,
-        args,
-        epoch,
-        global_step,
-        device,
-        vae,
-        tokenizers,
-        text_encoders,
-        unet,
-        prompt_replacement,
-    )
+     args: argparse.Namespace,
+     epoch: int,
+     global_step: int,
+     device: torch.device,
+     vae,
+     tokenizers,
+     text_encoders,
+     unet,
+     # prompt_replacement: Optional[dict] = None,  # Remove prompt_replacement parameter since we don't need it
+ ):
+     train_util.sample_images_common(
+         SdxlStableDiffusionLongPromptWeightingPipeline,
+         args, # pass args properly
+         epoch,
+         global_step,
+         device,
+         vae,
+         tokenizers,
+         text_encoders,
+         unet,
+         # prompt_replacement, # Remove prompt_replacement since we don't need it
+     )
