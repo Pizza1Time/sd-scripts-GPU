@@ -4245,75 +4245,84 @@ def prepare_dtype(args: argparse.Namespace):
     return weight_dtype, save_dtype
 
 
-def _load_target_model(args: argparse.Namespace, weight_dtype, device="cpu", unet_use_linear_projection_in_v2=False):
-    name_or_path = args.pretrained_model_name_or_path
-    name_or_path = os.path.realpath(name_or_path) if os.path.islink(name_or_path) else name_or_path
+def _load_target_model(
+    name_or_path: str, vae_path: Optional[str], model_version: str, weight_dtype, device="cpu", model_dtype=None
+):
+    # model_dtype only work with full fp16/bf16
+    name_or_path = os.readlink(name_or_path) if os.path.islink(name_or_path) else name_or_path
     load_stable_diffusion_format = os.path.isfile(name_or_path)  # determine SD or Diffusers
+
     if load_stable_diffusion_format:
         logger.info(f"load StableDiffusion checkpoint: {name_or_path}")
-        text_encoder, vae, unet = model_util.load_models_from_stable_diffusion_checkpoint(
-            args.v2, name_or_path, device, unet_use_linear_projection_in_v2=unet_use_linear_projection_in_v2
-        )
+        (
+            text_encoder1,
+            text_encoder2,
+            vae,
+            unet,
+            logit_scale,
+            ckpt_info,
+        ) = sdxl_model_util.load_models_from_sdxl_checkpoint(model_version, name_or_path, device, model_dtype)
     else:
-        # Diffusers model is loaded to CPU
-        logger.info(f"load Diffusers pretrained models: {name_or_path}")
-        try:
-            pipe = StableDiffusionPipeline.from_pretrained(name_or_path, tokenizer=None, safety_checker=None)
-        except EnvironmentError as ex:
-            logger.error(
-                f"model is not found as a file or in Hugging Face, perhaps file name is wrong? / 指定したモデル名のファイル、またはHugging Faceのモデルが見つかりません。ファイル名が誤っているかもしれません: {name_or_path}"
-            )
-            raise ex
-        text_encoder = pipe.text_encoder
+        from diffusers import StableDiffusionXLPipeline
+
+        variant = "fp16" if weight_dtype == torch.float16 else None
+        logger.info(f"load Diffusers pretrained models: {name_or_path}, variant={variant}")
+
+        # Load to CPU first, then move to XLA device
+        pipe = StableDiffusionXLPipeline.from_pretrained(name_or_path, torch_dtype=torch.float32, variant=variant, tokenizer=None, local_files_only=True)
+        pipe.to(torch.device("cpu"))
+
+        text_encoder1 = pipe.text_encoder
+        text_encoder2 = pipe.text_encoder_2
         vae = pipe.vae
         unet = pipe.unet
         del pipe
 
+        # Move models to target device with specified dtype
+        text_encoder1.to(device, dtype=model_dtype)
+        text_encoder2.to(device, dtype=model_dtype)
+        vae.to(device, dtype=model_dtype if model_dtype is not None else vae.dtype)
+        unet.to(device, dtype=model_dtype)
+
         # Diffusers U-Net to original U-Net
-        # TODO *.ckpt/*.safetensorsのv2と同じ形式にここで変換すると良さそう
-        # logger.info(f"unet config: {unet.config}")
-        original_unet = UNet2DConditionModel(
-            unet.config.sample_size,
-            unet.config.attention_head_dim,
-            unet.config.cross_attention_dim,
-            unet.config.use_linear_projection,
-            unet.config.upcast_attention,
-        )
-        original_unet.load_state_dict(unet.state_dict())
-        unet = original_unet
+        state_dict = sdxl_model_util.convert_diffusers_unet_state_dict_to_sdxl(unet.state_dict())
+        with init_empty_weights():
+            unet = sdxl_original_unet.SdxlUNet2DConditionModel()
+        sdxl_model_util.load_state_dict(unet, state_dict)
         logger.info("U-Net converted to original U-Net")
 
+        logit_scale = None
+        ckpt_info = None
+
     # VAEを読み込む
-    if args.vae is not None:
-        vae = model_util.load_vae(args.vae, weight_dtype)
+    if vae_path is not None:
+        vae = model_util.load_vae(vae_path, weight_dtype)
+        vae.to(device, dtype=model_dtype)
         logger.info("additional VAE loaded")
 
-    return text_encoder, vae, unet, load_stable_diffusion_format
+    return load_stable_diffusion_format, text_encoder1, text_encoder2, vae, unet, logit_scale, ckpt_info
 
-
-def load_target_model(args, weight_dtype, unet_use_linear_projection_in_v2=False):
-    device = xm.xla_device()
+def load_target_model(args, device, model_version: str, weight_dtype):
+    model_dtype = match_mixed_precision(args, weight_dtype)
     logger.info(f"loading model for process {xm.get_ordinal()}/{xm.xrt_world_size()}")
-
-    text_encoder, vae, unet, load_stable_diffusion_format = _load_target_model(
-        args,
+    (
+        load_stable_diffusion_format,
+        text_encoder1,
+        text_encoder2,
+        vae,
+        unet,
+        logit_scale,
+        ckpt_info,
+    ) = _load_target_model(
+        args.pretrained_model_name_or_path,
+        args.vae,
+        model_version,
         weight_dtype,
-        device if args.lowram else "cpu",
-        unet_use_linear_projection_in_v2=unet_use_linear_projection_in_v2,
+        device,
+        model_dtype
     )
 
-    # work on low-ram device
-    if args.lowram:
-        text_encoder.to(device)
-        unet.to(device)
-        vae.to(device)
-
-    #xm.clear_cache()
-
-    # Ensure the models are replicated on all devices.
-    xm.rendezvous("load_target_model")
-
-    return text_encoder, vae, unet, load_stable_diffusion_format
+    return load_stable_diffusion_format, text_encoder1, text_encoder2, vae, unet, logit_scale, ckpt_info
 
 
 """ def patch_accelerator_for_fp16_training(accelerator):
