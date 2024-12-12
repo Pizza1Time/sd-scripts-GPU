@@ -532,6 +532,9 @@ def train(index, args):
     # resumeする
     # train_util.resume_from_local_or_hf_if_specified(accelerator, args)
     # train_util.resume_from_local_or_hf_if_specified(None, args) # Remove accelerator # TODO need to verify how to resume in torch-xla
+    
+    #global_step = 0 
+    
     if args.resume is not None:
         logger.info(f"resume training from {args.resume}")
         resume_path = args.resume
@@ -539,6 +542,7 @@ def train(index, args):
             resume_extension = ".safetensors"
             state_dict = train_util.load_file_from_safetensors(args.resume)
         else:
+            #global_step = 0
             resume_extension = ".ckpt"
             state_dict = torch.load(args.resume)
 
@@ -627,7 +631,7 @@ def train(index, args):
         progress_bar = tqdm(total=args.max_train_steps, smoothing=0, desc="steps", position=0)
         progress_bar.update(global_step)
 
-    # global_step = 0
+    global_step = 0
 
     noise_scheduler = DDPMScheduler(
         beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000, clip_sample=False
