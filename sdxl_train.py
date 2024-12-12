@@ -358,7 +358,7 @@ def train(args):
     # 学習に必要なクラスを準備する
     accelerator.print("prepare optimizer, data loader etc.")
     #_, _, optimizer = train_util.get_optimizer(args, trainable_params=params_to_optimize)
-    optimizer_type, optimizer_kwargs, optimizer = train_util.get_optimizer(args, trainable_params=params_to_optimize, use_groups=True)
+    optimizer_type, optimizer_kwargs, optimizer = train_util.get_optimizer(args, trainable_params=params_to_optimize)
 
     # dataloaderを準備する
     # DataLoaderのプロセス数：0 は persistent_workers が使えないので注意
