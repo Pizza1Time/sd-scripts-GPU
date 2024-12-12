@@ -25,67 +25,8 @@ TOKENIZER2_PATH = "laion/CLIP-ViT-bigG-14-laion2B-39B-b160k"
 
 # DEFAULT_NOISE_OFFSET = 0.0357
 
-
-import argparse
-import math
-import os
-from typing import Optional
-
-import torch
-# from library.device_utils import init_ipex, clean_memory_on_device
-# init_ipex()
-import torch_xla.core.xla_model as xm
-import torch_xla.distributed.xla_multiprocessing as xmp
-import torch_xla.utils.utils as xu
-
-from accelerate import init_empty_weights
-from tqdm import tqdm
-from transformers import CLIPTokenizer
-from library import model_util, sdxl_model_util, train_util, sdxl_original_unet
-from library.sdxl_lpw_stable_diffusion import SdxlStableDiffusionLongPromptWeightingPipeline
-from .utils import setup_logging
-setup_logging()
-import logging
-logger = logging.getLogger(__name__)
-
-TOKENIZER1_PATH = "openai/clip-vit-large-patch14"
-TOKENIZER2_PATH = "laion/CLIP-ViT-bigG-14-laion2B-39B-b160k"
-
-# DEFAULT_NOISE_OFFSET = 0.0357
-
 # def load_target_model(args, accelerator, model_version: str, weight_dtype):
 def load_target_model(args, device, model_version: str, weight_dtype):
-    # model_dtype only work with full fp16/bf16
-    # for pi in range(accelerator.state.num_processes):
-    #     if pi == accelerator.state.local_process_index:
-    #         logger.info(f"loading model for process {accelerator.state.local_process_index}/{accelerator.state.num_processes}")
-
-    #         (
-    #             load_stable_diffusion_format,
-    #             text_encoder1,
-    #             text_encoder2,
-    #             vae,
-    #             unet,
-    #             logit_scale,
-    #             ckpt_info,
-    #         ) = _load_target_model(
-    #             args.pretrained_model_name_or_path,
-    #             args.vae,
-    #             model_version,
-    #             weight_dtype,
-    #             accelerator.device if args.lowram else "cpu",
-    #             model_dtype,
-    #         )
-
-    #         # work on low-ram device
-    #         if args.lowram:
-    #             text_encoder1.to(accelerator.device)
-    #             text_encoder2.to(accelerator.device)
-    #             unet.to(accelerator.device)
-    #             vae.to(accelerator.device)
-
-    #         clean_memory_on_device(accelerator.device)
-    #     accelerator.wait_for_everyone()
     model_dtype = match_mixed_precision(args, weight_dtype)
     logger.info(f"loading model for process {xm.get_ordinal()}/{xm.xrt_world_size()}")
     (
@@ -202,18 +143,6 @@ def load_tokenizers(args: argparse.Namespace):
     return tokeniers
 
 def match_mixed_precision(args, weight_dtype):
-    # if args.full_fp16:
-    #     assert (
-    #         weight_dtype == torch.float16
-    #     ), "full_fp16 requires mixed precision='fp16' / full_fp16を使う場合はmixed_precision='fp16'を指定してください。"
-    #     return weight_dtype
-    # elif args.full_bf16:
-    #     assert (
-    #         weight_dtype == torch.bfloat16
-    #     ), "full_bf16 requires mixed precision='bf16' / full_bf16を使う場合はmixed_precision='bf16'を指定してください。"
-    #     return weight_dtype
-    # else:
-    #     return None
     if args.mixed_precision == "fp16":
         return torch.float16
     elif args.mixed_precision == "bf16":
@@ -383,19 +312,6 @@ def verify_sdxl_training_args(args: argparse.Namespace, supportTextEncoderCachin
 
     if args.clip_skip is not None:
         logger.warning("clip_skip will be unexpected / SDXL学習ではclip_skipは動作しません")
-
-    # if args.multires_noise_iterations:
-    #     logger.info(
-    #         f"Warning: SDXL has been trained with noise_offset={DEFAULT_NOISE_OFFSET}, but noise_offset is disabled due to multires_noise_iterations / SDXLはnoise_offset={DEFAULT_NOISE_OFFSET}で学習されていますが、multires_noise_iterationsが有効になっているためnoise_offsetは無効になります"
-    #     )
-    # else:
-    #     if args.noise_offset is None:
-    #         args.noise_offset = DEFAULT_NOISE_OFFSET
-    #     elif args.noise_offset != DEFAULT_NOISE_OFFSET:
-    #         logger.info(
-    #             f"Warning: SDXL has been trained with noise_offset={DEFAULT_NOISE_OFFSET} / SDXLはnoise_offset={DEFAULT_NOISE_OFFSET}で学習されています"
-    #         )
-    #     logger.info(f"noise_offset is set to {args.noise_offset} / noise_offsetが{args.noise_offset}に設定されました")
 
     assert (
         not hasattr(args, "weighted_captions") or not args.weighted_captions
